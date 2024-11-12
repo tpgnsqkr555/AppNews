@@ -1,26 +1,29 @@
 package com.example.appnews
 
+import android.graphics.Bitmap
 import android.os.Bundle
-import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.example.appnews.ui.theme.AppNewsTheme
-import kotlinx.coroutines.launch
-import retrofit2.Retrofit
-import retrofit2.converter.gson.GsonConverterFactory
 
+@OptIn(ExperimentalMaterial3Api::class)
 class MainActivity : ComponentActivity() {
     companion object {
         const val API_KEY = "9057dba32aec4d66afcafe8c2f69e630"
-        const val BASE_URL = "https://newsapi.org/"
+        const val SPORT = "NBA"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -28,7 +31,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             AppNewsTheme {
-                NewsApp()
+                SportNewsScreen()
             }
         }
     }
@@ -36,29 +39,53 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NewsApp() {
-    var articles by remember { mutableStateOf<List<Article>>(emptyList()) }
+fun SportNewsScreen() {
+    val context = LocalContext.current
+    var article by remember { mutableStateOf<Article?>(null) }
     var isLoading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
+    var bitmap by remember { mutableStateOf<Bitmap?>(null) }
 
-    // fetch news when the app starts
+    val cacheManager = remember { CacheManager(context) }
+    val cronetClient = remember { CronetClient(context) }
+
     LaunchedEffect(true) {
         try {
-            val retrofit = Retrofit.Builder()
-                .baseUrl(MainActivity.BASE_URL)
-                .addConverterFactory(GsonConverterFactory.create())
-                .build()
+            if (!cacheManager.isCacheExpired()) {
+                Toast.makeText(context, "Loading from cache...", Toast.LENGTH_SHORT).show()
+                val cachedData = cacheManager.loadCachedArticle()
+                if (cachedData != null) {
+                    article = cachedData.first
+                    bitmap = cachedData.second
+                    isLoading = false
+                    return@LaunchedEffect
+                }
+            }
 
-            val newsApi = retrofit.create(NewsApi::class.java)
+            Toast.makeText(context, "Fetching new data...", Toast.LENGTH_SHORT).show()
+            val response = cronetClient.fetchSportsNews(
+                sport = MainActivity.SPORT,
+                apiKey = MainActivity.API_KEY
+            )
 
-            Log.d("NewsApp", "Starting API request")
-            val response = newsApi.getAndroidNews(apiKey = MainActivity.API_KEY)
-            Log.d("NewsApp", "Got response: ${response.articles.size} articles")
+            val articlesWithImages = response.articles.filter { !it.imageUrl.isNullOrEmpty() }
+            if (articlesWithImages.isNotEmpty()) {
+                val selectedArticle = articlesWithImages.random()
+                article = selectedArticle
 
-            articles = response.articles
+                // Download and cache image
+                selectedArticle.imageUrl?.let { imageUrl ->
+                    bitmap = cacheManager.downloadAndCacheImage(imageUrl)
+                }
+
+                // Cache the article and image
+                cacheManager.cacheArticle(selectedArticle, bitmap)
+                Toast.makeText(context, "New article cached", Toast.LENGTH_SHORT).show()
+            } else {
+                error = "No articles with images found"
+            }
         } catch (e: Exception) {
-            Log.e("NewsApp", "Error fetching news: ${e.message}", e)
-            error = "API Error: ${e.message}"
+            error = "Error: ${e.message}"
         } finally {
             isLoading = false
         }
@@ -68,7 +95,7 @@ fun NewsApp() {
         modifier = Modifier.fillMaxSize(),
         topBar = {
             CenterAlignedTopAppBar(
-                title = { Text("Android News") },
+                title = { Text("${MainActivity.SPORT} News") },
                 colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primaryContainer,
                     titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer
@@ -88,30 +115,68 @@ fun NewsApp() {
                     )
                 }
                 error != null -> {
-                    Column(
+                    Text(
+                        text = error ?: "Unknown error occurred",
+                        color = MaterialTheme.colorScheme.error,
                         modifier = Modifier
                             .align(Alignment.Center)
                             .padding(16.dp)
-                    ) {
-                        Text(
-                            text = error ?: "Unknown error occurred",
-                            color = MaterialTheme.colorScheme.error
-                        )
-                    }
+                    )
                 }
                 else -> {
-                    NewsList(articles = articles)
+                    ArticleContent(
+                        article = article,
+                        bitmap = bitmap
+                    )
                 }
             }
         }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Preview(showBackground = true)
 @Composable
-fun NewsAppPreview() {
-    AppNewsTheme {
-        NewsApp()
+fun ArticleContent(
+    article: Article?,
+    bitmap: Bitmap?
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+            .verticalScroll(rememberScrollState())
+    ) {
+        bitmap?.let {
+            Image(
+                bitmap = it.asImageBitmap(),
+                contentDescription = "Article image",
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(200.dp)
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        article?.title?.let {
+            Text(
+                text = it,
+                style = MaterialTheme.typography.headlineMedium
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+
+        article?.source?.name?.let {
+            Text(
+                text = "Source: $it",
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        article?.content?.let {
+            Text(
+                text = it,
+                style = MaterialTheme.typography.bodyLarge
+            )
+        }
     }
 }

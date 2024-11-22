@@ -11,8 +11,8 @@ Requirements Implementation
 - Maintains timestamp of last API retrieval
 - Uses System.currentTimeMillis() for timestamp checking
 
-Individual Contribution
-Sehoon Park
+Contribution
+Sehoon Park & Gilmore Timothy
 - Implemented all core functionalities:
   - Set up Cronet for network requests
   - Implemented Gson deserialization
